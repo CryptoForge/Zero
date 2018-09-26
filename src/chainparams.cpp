@@ -15,8 +15,6 @@
 
 #include "base58.h"
 
-using namespace std;
-
 #include "chainparamsseeds.h"
 
 static CBlock CreateGenesisBlock(const char* pszTimestamp, const CScript& genesisOutputScript, uint32_t nTime, const uint256& nNonce, const std::vector<unsigned char>& nSolution, uint32_t nBits, int32_t nVersion, const CAmount& genesisReward)
@@ -223,7 +221,7 @@ static CMainParams mainParams;
 /**
  * Testnet (v3)
  */
-class CTestNetParams : public CMainParams {
+class CTestNetParams : public CChainParams {
 public:
     CTestNetParams() {
         strNetworkID = "test";
@@ -338,7 +336,7 @@ static CTestNetParams testNetParams;
 /**
  * Regression test
  */
-class CRegTestParams : public CTestNetParams {
+class CRegTestParams : public CChainParams {
 public:
     CRegTestParams() {
         strNetworkID = "regtest";
@@ -369,7 +367,7 @@ public:
         pchMessageStart[1] = 0xe8;
         pchMessageStart[2] = 0x3f;
         pchMessageStart[3] = 0x5f;
-
+        nDefaultPort = 18344;
         nMaxTipAge = 24 * 60 * 60;
         nPruneAfterHeight = 1000;
         const size_t N = 48, K = 5;
@@ -401,6 +399,16 @@ public:
             0,
             0
         };
+        // These prefixes are the same as the testnet prefixes
+        base58Prefixes[PUBKEY_ADDRESS]     = {0x1D,0x25};
+        base58Prefixes[SCRIPT_ADDRESS]     = {0x1C,0xBA};
+        base58Prefixes[SECRET_KEY]         = {0xEF};
+        // do not rely on these BIP32 prefixes; they are not specified and may change
+        base58Prefixes[EXT_PUBLIC_KEY]     = {0x04,0x35,0x87,0xCF};
+        base58Prefixes[EXT_SECRET_KEY]     = {0x04,0x35,0x83,0x94};
+        base58Prefixes[ZCPAYMENT_ADDRRESS] = {0x16,0xB6};
+        base58Prefixes[ZCVIEWING_KEY]      = {0xA8,0xAC,0x0C};
+        base58Prefixes[ZCSPENDING_KEY]     = {0xAC,0x08};
 
         // guarantees the first 2 characters, when base58 encoded, are "tm"
         base58Prefixes[PUBKEY_ADDRESS]     = {0x1D,0x25};

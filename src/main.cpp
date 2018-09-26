@@ -861,7 +861,7 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& in
 
 /**
  * Check a transaction contextually against a set of consensus rules valid at a given block height.
- * 
+ *
  * Notes:
  * 1. AcceptToMemoryPool calls CheckTransaction and this function.
  * 2. ProcessNewBlock calls AcceptBlock, which calls CheckBlock (which calls CheckTransaction)
@@ -897,7 +897,7 @@ bool ContextualCheckTransaction(const CTransaction& tx, CValidationState &state,
             return state.DoS(dosLevel, error("ContextualCheckTransaction: overwinter is active"),
                             REJECT_INVALID, "tx-overwinter-active");
         }
-    
+
         // Check that all transactions are unexpired
         if (IsExpiredTx(tx, nHeight)) {
             return state.DoS(dosLevel, error("ContextualCheckTransaction(): transaction is expired"), REJECT_INVALID, "tx-overwinter-expired");

@@ -84,7 +84,7 @@ public:
         strCurrencyUnits = "ZER";
         bip44CoinType = 133; // As registered in https://github.com/satoshilabs/slips/blob/master/slip-0044.md
         consensus.fCoinbaseMustBeProtected = true;
-        consensus.nFeeStartBlockHeight = 412300;
+        consensus.nFeeStartBlockHeight = 1;
         consensus.nSubsidyHalvingInterval = 800000;
         consensus.nMajorityEnforceBlockUpgrade = 750;
         consensus.nMajorityRejectBlockOutdated = 950;
@@ -103,9 +103,9 @@ public:
         consensus.vUpgrades[Consensus::UPGRADE_TESTDUMMY].nActivationHeight =
             Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
         consensus.vUpgrades[Consensus::UPGRADE_OVERWINTER].nProtocolVersion = 170005;
-        consensus.vUpgrades[Consensus::UPGRADE_OVERWINTER].nActivationHeight = 1525;
+        consensus.vUpgrades[Consensus::UPGRADE_OVERWINTER].nActivationHeight = 400000;
         consensus.vUpgrades[Consensus::UPGRADE_SAPLING].nProtocolVersion = 170007;
-        consensus.vUpgrades[Consensus::UPGRADE_SAPLING].nActivationHeight = 1525;
+        consensus.vUpgrades[Consensus::UPGRADE_SAPLING].nActivationHeight = 400000;
 
 
         // The best chain should have at least this much work.

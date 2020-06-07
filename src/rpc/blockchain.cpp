@@ -1,7 +1,7 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2014 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
-// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+// file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
 #include "amount.h"
 #include "base58.h"
@@ -9,6 +9,7 @@
 #include "chainparams.h"
 #include "checkpoints.h"
 #include "consensus/validation.h"
+#include "init.h"
 #include "key_io.h"
 #include "main.h"
 #include "primitives/transaction.h"
@@ -17,6 +18,7 @@
 #include "streams.h"
 #include "sync.h"
 #include "util.h"
+#include "wallet/wallet.h"
 
 #include <stdint.h>
 
@@ -128,17 +130,15 @@ UniValue blockheaderToJSON(const CBlockIndex* blockindex)
     return result;
 }
 
+// insightexplorer
 UniValue blockToDeltasJSON(const CBlock& block, const CBlockIndex* blockindex)
 {
     UniValue result(UniValue::VOBJ);
     result.push_back(Pair("hash", block.GetHash().GetHex()));
-    int confirmations = -1;
     // Only report confirmations if the block is on the main chain
-    if (chainActive.Contains(blockindex)) {
-        confirmations = chainActive.Height() - blockindex->nHeight + 1;
-    } else {
+    if (!chainActive.Contains(blockindex))
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block is an orphan");
-    }
+    int confirmations = chainActive.Height() - blockindex->nHeight + 1;
     result.push_back(Pair("confirmations", confirmations));
     result.push_back(Pair("size", (int)::GetSerializeSize(block, SER_NETWORK, PROTOCOL_VERSION)));
     result.push_back(Pair("height", blockindex->nHeight));
@@ -146,7 +146,6 @@ UniValue blockToDeltasJSON(const CBlock& block, const CBlockIndex* blockindex)
     result.push_back(Pair("merkleroot", block.hashMerkleRoot.GetHex()));
 
     UniValue deltas(UniValue::VARR);
-
     for (unsigned int i = 0; i < block.vtx.size(); i++) {
         const CTransaction &tx = block.vtx[i];
         const uint256 txhash = tx.GetHash();
@@ -156,66 +155,53 @@ UniValue blockToDeltasJSON(const CBlock& block, const CBlockIndex* blockindex)
         entry.push_back(Pair("index", (int)i));
 
         UniValue inputs(UniValue::VARR);
-
         if (!tx.IsCoinBase()) {
-
             for (size_t j = 0; j < tx.vin.size(); j++) {
                 const CTxIn input = tx.vin[j];
-
                 UniValue delta(UniValue::VOBJ);
-
                 CSpentIndexValue spentInfo;
                 CSpentIndexKey spentKey(input.prevout.hash, input.prevout.n);
 
-                if (GetSpentIndex(spentKey, spentInfo)) {
-                    if (spentInfo.addressType == 1) {
-                        delta.push_back(Pair("address", EncodeDestination(CKeyID(spentInfo.addressHash))));
-                    } else if (spentInfo.addressType == 2)  {
-                        delta.push_back(Pair("address", EncodeDestination(CScriptID(spentInfo.addressHash))));
-                    } else {
-                        continue;
-                    }
-                    delta.push_back(Pair("satoshis", -1 * spentInfo.satoshis));
-                    delta.push_back(Pair("index", (int)j));
-                    delta.push_back(Pair("prevtxid", input.prevout.hash.GetHex()));
-                    delta.push_back(Pair("prevout", (int)input.prevout.n));
-
-                    inputs.push_back(delta);
-                } else {
+                if (!GetSpentIndex(spentKey, spentInfo)) {
                     throw JSONRPCError(RPC_INTERNAL_ERROR, "Spent information not available");
                 }
+                CTxDestination dest = DestFromAddressHash(spentInfo.addressType, spentInfo.addressHash);
+                if (IsValidDestination(dest)) {
+                    delta.push_back(Pair("address", EncodeDestination(dest)));
+                }
+                delta.push_back(Pair("satoshis", -1 * spentInfo.satoshis));
+                delta.push_back(Pair("index", (int)j));
+                delta.push_back(Pair("prevtxid", input.prevout.hash.GetHex()));
+                delta.push_back(Pair("prevout", (int)input.prevout.n));
 
+                inputs.push_back(delta);
             }
         }
-
         entry.push_back(Pair("inputs", inputs));
 
         UniValue outputs(UniValue::VARR);
-
         for (unsigned int k = 0; k < tx.vout.size(); k++) {
             const CTxOut &out = tx.vout[k];
-
             UniValue delta(UniValue::VOBJ);
+            const uint160 addrhash = out.scriptPubKey.AddressHash();
+            CTxDestination dest;
 
             if (out.scriptPubKey.IsPayToScriptHash()) {
-                vector<unsigned char> hashBytes(out.scriptPubKey.begin()+2, out.scriptPubKey.begin()+22);
-                delta.push_back(Pair("address", EncodeDestination(CScriptID(uint160(hashBytes)))));
+                dest = CScriptID(addrhash);
             } else if (out.scriptPubKey.IsPayToPublicKeyHash()) {
-                vector<unsigned char> hashBytes(out.scriptPubKey.begin()+3, out.scriptPubKey.begin()+23);
-                delta.push_back(Pair("address", EncodeDestination(CKeyID(uint160(hashBytes)))));
-            } else {
-                continue;
+                dest = CKeyID(addrhash);
             }
-
+            if (IsValidDestination(dest)) {
+                delta.push_back(Pair("address", EncodeDestination(dest)));
+            }
+            delta.push_back(Pair("address", EncodeDestination(dest)));
             delta.push_back(Pair("satoshis", out.nValue));
             delta.push_back(Pair("index", (int)k));
 
             outputs.push_back(delta);
         }
-
         entry.push_back(Pair("outputs", outputs));
         deltas.push_back(entry);
-
     }
     result.push_back(Pair("deltas", deltas));
     result.push_back(Pair("time", block.GetBlockTime()));
@@ -421,16 +407,70 @@ UniValue getrawmempool(const UniValue& params, bool fHelp)
     return mempoolToJSON(fVerbose);
 }
 
+// insightexplorer
 UniValue getblockdeltas(const UniValue& params, bool fHelp)
 {
+    std::string enableArg = "insightexplorer";
+    bool enabled = fExperimentalMode && fInsightExplorer;
+    std::string disabledMsg = "";
+    if (!enabled) {
+        disabledMsg = experimentalDisabledHelpMsg("getblockdeltas", enableArg);
+    }
     if (fHelp || params.size() != 1)
-    throw runtime_error(
-        "getblockdeltas blockhash\n"
-        "\nReturns blockdeltas.\n"
-        "\nExamples:\n"
-        + HelpExampleCli("getblockhashes", "002e3917fdd7f4b7ae45edbfed915abaa6c483d0e024e3cfc038251d17a65cd6")
-        + HelpExampleRpc("getblockhashes", "002e3917fdd7f4b7ae45edbfed915abaa6c483d0e024e3cfc038251d17a65cd6")
-        );;
+        throw runtime_error(
+            "getblockdeltas \"blockhash\"\n"
+            "\nReturns information about the given block and its transactions.\n"
+            + disabledMsg +
+            "\nArguments:\n"
+            "1. \"hash\"          (string, required) The block hash\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"hash\": \"hash\",              (string) block ID\n"
+            "  \"confirmations\": n,          (numeric) number of confirmations\n"
+            "  \"size\": n,                   (numeric) block size in bytes\n"
+            "  \"height\": n,                 (numeric) block height\n"
+            "  \"version\": n,                (numeric) block version (e.g. 4)\n"
+            "  \"merkleroot\": \"hash\",        (hexstring) block Merkle root\n"
+            "  \"deltas\": [\n"
+            "    {\n"
+            "      \"txid\": \"hash\",          (hexstring) transaction ID\n"
+            "      \"index\": n,              (numeric) The offset of the tx in the block\n"
+            "      \"inputs\": [                (array of json objects)\n"
+            "        {\n"
+            "          \"address\": \"taddr\",  (string) transparent address\n"
+            "          \"satoshis\": n,       (numeric) negative of spend amount\n"
+            "          \"index\": n,          (numeric) vin index\n"
+            "          \"prevtxid\": \"hash\",  (string) source utxo tx ID\n"
+            "          \"prevout\": n         (numeric) source utxo index\n"
+            "        }, ...\n"
+            "      ],\n"
+            "      \"outputs\": [             (array of json objects)\n"
+            "        {\n"
+            "          \"address\": \"taddr\",  (string) transparent address\n"
+            "          \"satoshis\": n,       (numeric) amount\n"
+            "          \"index\": n           (numeric) vout index\n"
+            "        }, ...\n"
+            "      ]\n"
+            "    }, ...\n"
+            "  ],\n"
+            "  \"time\" : n,                  (numeric) The block version\n"
+            "  \"mediantime\": n,             (numeric) The most recent blocks' ave time\n"
+            "  \"nonce\" : \"nonce\",           (hex string) The nonce\n"
+            "  \"bits\" : \"1d00ffff\",         (hex string) The bits\n"
+            "  \"difficulty\": n,             (numeric) the current difficulty\n"
+            "  \"chainwork\": \"xxxx\"          (hex string) total amount of work in active chain\n"
+            "  \"previousblockhash\" : \"hash\",(hex string) The hash of the previous block\n"
+            "  \"nextblockhash\" : \"hash\"     (hex string) The hash of the next block\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("getblockdeltas", "00227e566682aebd6a7a5b772c96d7a999cadaebeaf1ce96f4191a3aad58b00b")
+            + HelpExampleRpc("getblockdeltas", "\"00227e566682aebd6a7a5b772c96d7a999cadaebeaf1ce96f4191a3aad58b00b\"")
+        );
+
+    if (!enabled) {
+        throw JSONRPCError(RPC_MISC_ERROR, "Error: getblockdeltas is disabled. "
+            "Run './zero-cli help getblockdeltas' for instructions on how to enable this feature.");
+    }
 
     std::string strHash = params[0].get_str();
     uint256 hash(uint256S(strHash));
@@ -444,41 +484,56 @@ UniValue getblockdeltas(const UniValue& params, bool fHelp)
     if (fHavePruned && !(pblockindex->nStatus & BLOCK_HAVE_DATA) && pblockindex->nTx > 0)
         throw JSONRPCError(RPC_INTERNAL_ERROR, "Block not available (pruned data)");
 
-    if(!ReadBlockFromDisk(block, pblockindex))
+    if (!ReadBlockFromDisk(block, pblockindex, Params().GetConsensus()))
         throw JSONRPCError(RPC_INTERNAL_ERROR, "Can't read block from disk");
 
     return blockToDeltasJSON(block, pblockindex);
 }
 
+// insightexplorer
 UniValue getblockhashes(const UniValue& params, bool fHelp)
 {
+    std::string enableArg = "insightexplorer";
+    bool fEnableGetBlockHashes = fExperimentalMode && fInsightExplorer;
+    std::string disabledMsg = "";
+    if (!fEnableGetBlockHashes) {
+        disabledMsg = experimentalDisabledHelpMsg("getblockhashes", enableArg);
+    }
     if (fHelp || params.size() < 2)
         throw runtime_error(
-            "getblockhashes timestamp\n"
-            "\nReturns array of hashes of blocks within the timestamp range provided.\n"
+            "getblockhashes high low ( {\"noOrphans\": true|false, \"logicalTimes\": true|false} )\n"
+            "\nReturns array of hashes of blocks within the timestamp range provided,\n"
+            "\ngreater or equal to low, less than high.\n"
+            + disabledMsg +
             "\nArguments:\n"
-            "1. high         (numeric, required) The newer block timestamp\n"
-            "2. low          (numeric, required) The older block timestamp\n"
-            "3. options      (string, required) A json object\n"
+            "1. high                            (numeric, required) The newer block timestamp\n"
+            "2. low                             (numeric, required) The older block timestamp\n"
+            "3. options                         (string, optional) A json object\n"
             "    {\n"
-            "      \"noOrphans\":true   (boolean) will only include blocks on the main chain\n"
-            "      \"logicalTimes\":true   (boolean) will include logical timestamps with hashes\n"
+            "      \"noOrphans\": true|false      (boolean) will only include blocks on the main chain\n"
+            "      \"logicalTimes\": true|false   (boolean) will include logical timestamps with hashes\n"
             "    }\n"
             "\nResult:\n"
             "[\n"
-            "  \"hash\"         (string) The block hash\n"
+            "  \"xxxx\"                   (hex string) The block hash\n"
             "]\n"
+            "or\n"
             "[\n"
             "  {\n"
-            "    \"blockhash\": (string) The block hash\n"
-            "    \"logicalts\": (numeric) The logical timestamp\n"
+            "    \"blockhash\": \"xxxx\"    (hex string) The block hash\n"
+            "    \"logicalts\": n         (numeric) The logical timestamp\n"
             "  }\n"
             "]\n"
             "\nExamples:\n"
-            + HelpExampleCli("getblockhashes", "1231614698 1231024505")
-            + HelpExampleRpc("getblockhashes", "1231614698, 1231024505")
-            + HelpExampleCli("getblockhashes", "1231614698 1231024505 '{\"noOrphans\":false, \"logicalTimes\":true}'")
+            + HelpExampleCli("getblockhashes", "1558141697 1558141576")
+            + HelpExampleRpc("getblockhashes", "1558141697, 1558141576")
+            + HelpExampleCli("getblockhashes", "1558141697 1558141576 '{\"noOrphans\":false, \"logicalTimes\":true}'")
             );
+
+    if (!fEnableGetBlockHashes) {
+        throw JSONRPCError(RPC_MISC_ERROR, "Error: getblockhashes is disabled. "
+            "Run './zcash-cli help getblockhashes' for instructions on how to enable this feature.");
+    }
 
     unsigned int high = params[0].get_int();
     unsigned int low = params[1].get_int();
@@ -486,30 +541,26 @@ UniValue getblockhashes(const UniValue& params, bool fHelp)
     bool fLogicalTS = false;
 
     if (params.size() > 2) {
-        if (params[2].isObject()) {
-            UniValue noOrphans = find_value(params[2].get_obj(), "noOrphans");
-            UniValue returnLogical = find_value(params[2].get_obj(), "logicalTimes");
+        UniValue noOrphans = find_value(params[2].get_obj(), "noOrphans");
+        if (!noOrphans.isNull())
+            fActiveOnly = noOrphans.get_bool();
 
-            if (noOrphans.isBool())
-                fActiveOnly = noOrphans.get_bool();
-
-            if (returnLogical.isBool())
-                fLogicalTS = returnLogical.get_bool();
-        }
+        UniValue returnLogical = find_value(params[2].get_obj(), "logicalTimes");
+        if (!returnLogical.isNull())
+            fLogicalTS = returnLogical.get_bool();
     }
 
     std::vector<std::pair<uint256, unsigned int> > blockHashes;
-
-    if (fActiveOnly)
+    {
         LOCK(cs_main);
-
-    if (!GetTimestampIndex(high, low, fActiveOnly, blockHashes)) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "No information available for block hashes");
+        if (!GetTimestampIndex(high, low, fActiveOnly, blockHashes)) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                "No information available for block hashes");
+        }
     }
-
     UniValue result(UniValue::VARR);
-
-    for (std::vector<std::pair<uint256, unsigned int> >::const_iterator it=blockHashes.begin(); it!=blockHashes.end(); it++) {
+    for (std::vector<std::pair<uint256, unsigned int> >::const_iterator it=blockHashes.begin();
+            it!=blockHashes.end(); it++) {
         if (fLogicalTS) {
             UniValue item(UniValue::VOBJ);
             item.push_back(Pair("blockhash", it->first.GetHex()));
@@ -519,7 +570,6 @@ UniValue getblockhashes(const UniValue& params, bool fHelp)
             result.push_back(it->first.GetHex());
         }
     }
-
     return result;
 }
 
@@ -703,7 +753,7 @@ UniValue getblock(const UniValue& params, bool fHelp)
     if (fHavePruned && !(pblockindex->nStatus & BLOCK_HAVE_DATA) && pblockindex->nTx > 0)
         throw JSONRPCError(RPC_INTERNAL_ERROR, "Block not available (pruned data)");
 
-    if(!ReadBlockFromDisk(block, pblockindex))
+    if(!ReadBlockFromDisk(block, pblockindex, Params().GetConsensus()))
         throw JSONRPCError(RPC_INTERNAL_ERROR, "Can't read block from disk");
 
     if (verbosity == 0)
@@ -860,7 +910,7 @@ UniValue verifychain(const UniValue& params, bool fHelp)
     if (params.size() > 1)
         nCheckDepth = params[1].get_int();
 
-    return CVerifyDB().VerifyDB(pcoinsTip, nCheckLevel, nCheckDepth);
+    return CVerifyDB().VerifyDB(Params(), pcoinsTip, nCheckLevel, nCheckDepth);
 }
 
 /** Implementation of IsSuperMajority with better feedback */
@@ -1139,6 +1189,10 @@ UniValue mempoolInfoToJSON()
     ret.push_back(Pair("bytes", (int64_t) mempool.GetTotalTxSize()));
     ret.push_back(Pair("usage", (int64_t) mempool.DynamicMemoryUsage()));
 
+    if (Params().NetworkIDString() == "regtest") {
+        ret.push_back(Pair("fullyNotified", mempool.IsFullyNotified()));
+    }
+
     return ret;
 }
 
@@ -1160,6 +1214,237 @@ UniValue getmempoolinfo(const UniValue& params, bool fHelp)
         );
 
     return mempoolInfoToJSON();
+}
+
+inline CBlockIndex* LookupBlockIndex(const uint256& hash)
+{
+    AssertLockHeld(cs_main);
+    BlockMap::const_iterator it = mapBlockIndex.find(hash);
+    return it == mapBlockIndex.end() ? nullptr : it->second;
+}
+
+// given a transaction count X, subtract out coinbase and dpow transactions
+// to give an "organic count". We return 0 instead of negative values
+#define ORG(X)  ( (X - blockcount - nNotarizationsDiff) > 0 ? (X - blockcount - nNotarizationsDiff) : 0 )
+
+UniValue getchaintxstats(const UniValue& params, bool fHelp)
+{
+    //THROW_IF_SYNCING(KOMODO_INSYNC);
+
+    if (fHelp || params.size() > 2)
+        throw runtime_error(
+                "getchaintxstats\n"
+                "\nCompute statistics about the total number and rate of transactions in the chain.\n"
+                "\nThis RPC will return a large amount of additional data if the shielded index (zindex) is enabled.\n"
+                "\nArguments:\n"
+                "1. nblocks   (numeric, optional) Number of blocks in averaging window.\n"
+                "2. blockhash (string, optional) The hash of the block which ends the window.\n"
+                "\nResult:\n"
+            "{\n"
+            "  \"time\": xxxxx,                           (numeric) The timestamp for the final block in the window in UNIX format.\n"
+            "  \"txcount\": xxxxx,                        (numeric) The total number of transactions in the chain up to that point.\n"
+            "  \"nullifiers\": xxxxx,                     (numeric) The total number of shielded nullifiers in the chain up to that point.\n"
+            "  \"shielded_txcount\": xxxxx,               (numeric) The total number of shielded (containing a zaddr) transactions in the chain up to that point.\n"
+            "  \"shielded_outputs\": xxxxx,               (numeric) The total number of shielded outputs in the chain up to that point.\n"
+            "  \"shielded_pool_size\": xxxxx,             (numeric) The total number of unspent shielded outputs, i.e. the Shielded Pool or Anonymity Set (anonset).\n"
+            "  \"shielding_txcount\": xxxxx,              (numeric) The total number of shielding (containing a zaddr output) transactions in the chain up to that point.\n"
+            "  \"deshielding_txcount\": xxxxx,            (numeric) The total number of deshielding (containing a zaddr input) transactions in the chain up to that point.\n"
+            "  \"fully_shielded_txcount\": xxxxx,         (numeric) The total number of z2z, AKA fully-shielded (containing only zaddr inputs+outputs) transactions in the chain up to that point.\n"
+            "  \"payments\": xxxxx,                       (numeric) The total number of payments in the chain up to that point.\n"
+            "  \"shielded_payments\": xxxxx,              (numeric) The total number of shielded (containing a zaddr) payments in the chain up to that point.\n"
+            "  \"shielding_payments\": xxxxx,             (numeric) The total number of shielding (containing a zaddr output) payments in the chain up to that point.\n"
+            "  \"deshielding_payments\": xxxxx,           (numeric) The total number of deshielding (containing a zaddr input) payments in the chain up to that point.\n"
+            "  \"fully_shielded_payments\": xxxxx,        (numeric) The total number of z2z, AKA fully-shielded (containing only zaddr inputs+outputs) payments in the chain up to that point.\n"
+            "  \"notarizations\": xxxxx,                  (numeric) The total number of notarization transactions in the chain up to that point.\n"
+            "  \"window_final_block_hash\": \"...\",      (string) The hash of the final block in the window.\n"
+            "  \"window_final_block_height\": xxxxx,      (numeric) Block height of final block in window.\n"
+            "  \"window_block_count\": xxxxx,             (numeric) Size of the window in number of blocks.\n"
+            "  \"window_tx_count\": xxxxx,                (numeric) The number of transactions in the window. Only returned if \"window_block_count\" is > 0.\n"
+            "  \"window_interval\": xxxxx,                (numeric) The elapsed time in the window in seconds. Only returned if \"window_block_count\" is > 0.\n"
+            "  \"window_shielded_txcount\": xxxxx,        (numeric) The total number of shielded (containing a zaddr) transactions in the chain up to that point.\n"
+            "  \"window_shielding_txcount\": xxxxx,       (numeric) The total number of shielding (containing a zaddr output) transactions in the chain up to that point.\n"
+            "  \"window_deshielding_txcount\": xxxxx,     (numeric) The total number of deshielding (containing a zaddr input) transactions in the chain up to that point.\n"
+            "  \"window_fully_shielded_txcount\": xxxxx,  (numeric) The total number of z2z, AKA fully-shielded (containing only zaddr inputs+outputs) transactions in the chain up to that point.\n"
+            "  \"window_shielded_payments\": xxxxx,       (numeric) The total number of shielded (containing a zaddr) payments in the chain up to that point.\n"
+            "  \"window_shielding_payments\": xxxxx,      (numeric) The total number of shielding (containing a zaddr output) payments in the chain up to that point.\n"
+            "  \"window_deshielding_payments\": xxxxx,    (numeric) The total number of deshielding (containing a zaddr input) payments in the chain up to that point.\n"
+            "  \"window_fully_shielded_payments\": xxxxx, (numeric) The total number of z2z, AKA fully-shielded (containing only zaddr inputs+outputs) payments in the chain up to that point.\n"
+            "  \"txrate\": x.xx,                          (numeric) The average rate of transactions per second in the window. Only returned if \"window_interval\" is > 0.\n"
+            "  \"shielded\": {                            (string)  The set of stats specific to only shieled transactions. \n"
+            "      \"fully_shielded_tx_percent\":         (numeric) The percentage of fully shielded transactions.\n"
+            "      \"shielding_tx_percent\":              (numeric) The percentage of shielding transactions.\n"
+            "      \"deshielding_tx_percent\":            (numeric) The percentage of deshielding transactions.\n"
+            "      \"fully_shielded_payments_percent\":   (numeric) The percentage of fully shielded payments.\n"
+            "      \"shielding_payments_percent\":        (numeric) The percentage of shielding payments.\n"
+            "      \"deshielding_payments_percent\":      (numeric) The percentage of deshielding payments.\n"
+            "  },\n"
+            "  \"organic\": {                             (string)  The set of stats about organic transactions, i.e. those that are not coinbase and not notarizations\n"
+            "      \"fully_shielded_tx_percent\":         (numeric) The percentage of fully shielded organic transactions.\n"
+            "      \"shielding_tx_percent\":              (numeric) The percentage of shielding organic transactions.\n"
+            "      \"deshielding_tx_percent\":            (numeric) The percentage of deshielding organic transactions.\n"
+            "      \"fully_shielded_payments_percent\":   (numeric) The percentage of fully shielded organic payments.\n"
+            "      \"shielding_payments_percent\":        (numeric) The percentage of shielding organic payments.\n"
+            "      \"deshielding_payments_percent\":      (numeric) The percentage of deshielding organic payments.\n"
+            "  }\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("getchaintxstats", "")
+            + HelpExampleRpc("getchaintxstats", "2016")
+        );
+
+    const CBlockIndex* pindex;
+    int blockcount = 30 * 24 * 60 * 60 / Params().GetConsensus().nPreBlossomPowTargetSpacing; // By default: 1 month
+
+    if (params[1].isNull()) {
+        LOCK(cs_main);
+        pindex = chainActive.Tip();
+    } else {
+        uint256 hash(ParseHashV(params[1], "blockhash"));
+        LOCK(cs_main);
+        pindex = LookupBlockIndex(hash);
+        if (!pindex) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+        }
+        if (!chainActive.Contains(pindex)) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Block is not in main chain");
+        }
+    }
+
+    assert(pindex != nullptr);
+
+    if (params[0].isNull()) {
+        blockcount = std::max(0, std::min(blockcount, pindex->nHeight - 1));
+    } else {
+        blockcount = params[0].get_int();
+
+        if (blockcount < 0 || (blockcount > 0 && blockcount >= pindex->nHeight)) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid block count: should be between 0 and the block's height - 1");
+        }
+    }
+
+    const CBlockIndex* pindexPast = pindex->GetAncestor(pindex->nHeight - blockcount);
+    int nTimeDiff                 = pindex->GetMedianTimePast() - pindexPast->GetMedianTimePast();
+    int nTxDiff                   = pindex->nChainTx - pindexPast->nChainTx;
+
+    UniValue ret(UniValue::VOBJ);
+    ret.push_back(Pair("time", (int64_t)pindex->nTime));
+    ret.push_back(Pair("txcount", (int64_t)pindex->nChainTx));
+    ret.push_back(Pair("window_final_block_hash", pindex->GetBlockHash().GetHex()));
+    ret.push_back(Pair("window_final_block_height", pindex->nHeight));
+    ret.push_back(Pair("window_block_count", blockcount));
+
+    if (fZindex) {
+        ret.push_back(Pair("notarizations", (int64_t)pindex->nChainNotarizations));
+        ret.push_back(Pair("shielded_txcount", (int64_t)pindex->nChainShieldedTx));
+        ret.push_back(Pair("fully_shielded_txcount", (int64_t)pindex->nChainFullyShieldedTx));
+        ret.push_back(Pair("deshielding_txcount", (int64_t)pindex->nChainDeshieldingTx));
+        ret.push_back(Pair("shielding_txcount", (int64_t)pindex->nChainShieldingTx));
+        ret.push_back(Pair("shielded_payments", (int64_t)pindex->nChainShieldedPayments));
+        ret.push_back(Pair("fully_shielded_payments", (int64_t)pindex->nChainFullyShieldedPayments));
+        ret.push_back(Pair("deshielding_payments", (int64_t)pindex->nChainDeshieldingPayments));
+        ret.push_back(Pair("shielding_payments", (int64_t)pindex->nChainShieldingPayments));
+
+        int64_t nullifierCount = pwalletMain->NullifierCount();
+        ret.push_back(Pair("nullifiers", (int64_t)nullifierCount));
+        ret.push_back(Pair("shielded_pool_size", (int64_t)pindex->nChainShieldedOutputs - nullifierCount));
+        ret.push_back(Pair("shielded_outputs", (int64_t)pindex->nChainShieldedOutputs));
+    }
+
+    if (blockcount > 0) {
+        ret.push_back(Pair("window_tx_count", nTxDiff));
+        ret.push_back(Pair("window_interval", nTimeDiff));
+        int64_t nPaymentsDiff              = pindex->nChainPayments - pindexPast->nChainPayments;
+        int64_t nShieldedTxDiff            = pindex->nChainShieldedTx - pindexPast->nChainShieldedTx;
+        int64_t nShieldingTxDiff           = pindex->nChainShieldingTx - pindexPast->nChainShieldingTx;
+        int64_t nDeshieldingTxDiff         = pindex->nChainDeshieldingTx - pindexPast->nChainDeshieldingTx;
+        int64_t nFullyShieldedTxDiff       = pindex->nChainFullyShieldedTx - pindexPast->nChainFullyShieldedTx;
+        int64_t nShieldedPaymentsDiff      = pindex->nChainShieldedPayments - pindexPast->nChainShieldedPayments;
+        int64_t nShieldingPaymentsDiff     = pindex->nChainShieldingPayments - pindexPast->nChainShieldingPayments;
+        int64_t nDeshieldingPaymentsDiff   = pindex->nChainDeshieldingPayments - pindexPast->nChainDeshieldingPayments;
+        int64_t nFullyShieldedPaymentsDiff = pindex->nChainFullyShieldedPayments - pindexPast->nChainFullyShieldedPayments;
+        int64_t nNotarizationsDiff         = pindex->nChainNotarizations - pindexPast->nChainNotarizations;
+
+        if (nTimeDiff > 0) {
+            ret.push_back(Pair("txrate",                     ((double)nTxDiff)                    / nTimeDiff));
+            if (fZindex) {
+                ret.push_back(Pair("notarization_txrate",        ((double)nNotarizationsDiff)         / nTimeDiff));
+                ret.push_back(Pair("shielded_txrate",            ((double)nShieldedTxDiff)            / nTimeDiff));
+                ret.push_back(Pair("fully_shielded_txrate",      ((double)nFullyShieldedTxDiff)       / nTimeDiff));
+                ret.push_back(Pair("paymentrate",                ((double)nPaymentsDiff)              / nTimeDiff));
+                ret.push_back(Pair("shielded_paymentrate",       ((double)nShieldedPaymentsDiff)      / nTimeDiff));
+                ret.push_back(Pair("fully_shielded_paymentrate", ((double)nFullyShieldedPaymentsDiff) / nTimeDiff));
+            }
+        }
+
+        if (fZindex) {
+            ret.push_back(Pair("window_payments", (int) nPaymentsDiff));
+            ret.push_back(Pair("window_notarizations", (int) nNotarizationsDiff));
+            ret.push_back(Pair("window_fully_shielded_txcount", nFullyShieldedTxDiff));
+            ret.push_back(Pair("window_deshielding_txcount", nDeshieldingTxDiff));
+            ret.push_back(Pair("window_shielding_txcount", nShieldingTxDiff));
+            ret.push_back(Pair("window_shielded_txcount", nShieldedTxDiff));
+            ret.push_back(Pair("window_fully_shielded_payments", nFullyShieldedPaymentsDiff));
+            ret.push_back(Pair("window_shielded_payments", nShieldedPaymentsDiff));
+            ret.push_back(Pair("window_shielding_payments", nShieldingPaymentsDiff));
+            ret.push_back(Pair("window_deshielding_payments", nDeshieldingPaymentsDiff));
+            if (nTxDiff > 0) {
+                ret.push_back(Pair("shielded_tx_percent",        ((double)nShieldedTxDiff)      / nTxDiff));
+                ret.push_back(Pair("fully_shielded_tx_percent",  ((double)nFullyShieldedTxDiff) / nTxDiff));
+                ret.push_back(Pair("shielding_tx_percent",       ((double)nShieldingTxDiff)     / nTxDiff));
+                ret.push_back(Pair("deshielding_tx_percent",     ((double)nDeshieldingTxDiff)   / nTxDiff));
+            }
+            if (nPaymentsDiff > 0) {
+                ret.push_back(Pair("shielded_payments_percent",       ((double)nShieldedPaymentsDiff)      / nPaymentsDiff));
+                ret.push_back(Pair("fully_shielded_payments_percent", ((double)nFullyShieldedPaymentsDiff) / nPaymentsDiff));
+                ret.push_back(Pair("shielding_payments_percent",      ((double)nShieldingPaymentsDiff)     / nPaymentsDiff));
+                ret.push_back(Pair("deshielding_payments_percent",    ((double)nDeshieldingPaymentsDiff)   / nPaymentsDiff));
+            }
+
+            // Statistics considering only zxtns
+            UniValue shielded(UniValue::VOBJ);
+            if (nShieldedTxDiff > 0) {
+                shielded.push_back(Pair("fully_shielded_tx_percent", ((double)nFullyShieldedTxDiff) / nShieldedTxDiff ));
+                shielded.push_back(Pair("shielding_tx_percent",      ((double)nShieldingTxDiff)     / nShieldedTxDiff ));
+                shielded.push_back(Pair("deshielding_tx_percent",    ((double)nDeshieldingTxDiff)   / nShieldedTxDiff ));
+            }
+            if (nShieldedPaymentsDiff > 0) {
+                shielded.push_back(Pair("fully_shielded_payments_percent", ((double)nFullyShieldedPaymentsDiff) / nShieldedPaymentsDiff ));
+                shielded.push_back(Pair("shielding_payments_percent",      ((double)nShieldingPaymentsDiff)     / nShieldedPaymentsDiff ));
+                shielded.push_back(Pair("deshielding_payments_percent",    ((double)nDeshieldingPaymentsDiff)   / nShieldedPaymentsDiff ));
+            }
+
+            if(nShieldedTxDiff+nShieldedPaymentsDiff > 0)
+                ret.push_back(Pair("shielded", shielded));
+
+            // Organic tx stats = Raw - Coinbase - DPoW
+            if (nTxDiff > 0) {
+                UniValue organic(UniValue::VOBJ);
+
+                if(ORG(nTxDiff) > 0) {
+                    organic.push_back(Pair("shielded_tx_percent",             ((double)nShieldedTxDiff)            / ORG(nTxDiff)));
+                    organic.push_back(Pair("fully_shielded_tx_percent",       ((double)nFullyShieldedTxDiff)       / ORG(nTxDiff)));
+                    organic.push_back(Pair("shielding_tx_percent",            ((double)nShieldingTxDiff)           / ORG(nTxDiff)));
+                    organic.push_back(Pair("deshielding_tx_percent",          ((double)nDeshieldingTxDiff)         / ORG(nTxDiff)));
+                }
+                if(ORG(nPaymentsDiff) > 0) {
+                    organic.push_back(Pair("shielded_payments_percent",       ((double)nShieldedPaymentsDiff)      / ORG(nPaymentsDiff)));
+                    organic.push_back(Pair("fully_shielded_payments_percent", ((double)nFullyShieldedPaymentsDiff) / ORG(nPaymentsDiff)));
+                    organic.push_back(Pair("shielding_payments_percent",      ((double)nShieldingPaymentsDiff)     / ORG(nPaymentsDiff)));
+                    organic.push_back(Pair("deshielding_payments_percent",    ((double)nDeshieldingPaymentsDiff)   / ORG(nPaymentsDiff)));
+                }
+                if (nTimeDiff > 0) {
+                    organic.push_back(Pair("paymentrate",                     ((double)ORG(nPaymentsDiff))         / nTimeDiff));
+                    organic.push_back(Pair("txrate",                          ((double)ORG(nTxDiff))               / nTimeDiff));
+                }
+                organic.push_back(Pair("txcount", (int) ORG(nTxDiff)));
+                organic.push_back(Pair("payments", (int) ORG(nPaymentsDiff)));
+                ret.push_back(Pair("organic", organic));
+            }
+
+         }
+    }
+
+    return ret;
 }
 
 UniValue invalidateblock(const UniValue& params, bool fHelp)
@@ -1186,11 +1471,11 @@ UniValue invalidateblock(const UniValue& params, bool fHelp)
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
 
         CBlockIndex* pblockindex = mapBlockIndex[hash];
-        InvalidateBlock(state, pblockindex);
+        InvalidateBlock(state, Params(), pblockindex);
     }
 
     if (state.IsValid()) {
-        ActivateBestChain(state);
+        ActivateBestChain(state, Params());
     }
 
     if (!state.IsValid()) {
@@ -1229,7 +1514,7 @@ UniValue reconsiderblock(const UniValue& params, bool fHelp)
     }
 
     if (state.IsValid()) {
-        ActivateBestChain(state);
+        ActivateBestChain(state, Params());
     }
 
     if (!state.IsValid()) {
@@ -1251,12 +1536,17 @@ static const CRPCCommand commands[] =
     { "blockchain",         "getblockhashes",         &getblockhashes,         true  },
     { "blockchain",         "getblockheader",         &getblockheader,         true  },
     { "blockchain",         "getchaintips",           &getchaintips,           true  },
+    { "blockchain",         "getchaintxstats",        &getchaintxstats,        true  },
     { "blockchain",         "getdifficulty",          &getdifficulty,          true  },
     { "blockchain",         "getmempoolinfo",         &getmempoolinfo,         true  },
     { "blockchain",         "getrawmempool",          &getrawmempool,          true  },
     { "blockchain",         "gettxout",               &gettxout,               true  },
     { "blockchain",         "gettxoutsetinfo",        &gettxoutsetinfo,        true  },
     { "blockchain",         "verifychain",            &verifychain,            true  },
+
+    // insightexplorer
+    { "blockchain",         "getblockdeltas",         &getblockdeltas,         false },
+    { "blockchain",         "getblockhashes",         &getblockhashes,         true  },
 
     /* Not shown in help */
     { "hidden",             "invalidateblock",        &invalidateblock,        true  },

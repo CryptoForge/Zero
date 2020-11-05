@@ -1034,16 +1034,16 @@ UniValue signrawtransaction(const UniValue& params, bool fHelp)
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid sighash param");
     }
 
+    const Consensus::Params& consensusParams = Params().GetConsensus();
+
     bool fHashSingle = ((nHashType & ~SIGHASH_ANYONECANPAY) == SIGHASH_SINGLE);
     // Use the approximate release height if it is greater so offline nodes
     // have a better estimation of the current height and will be more likely to
-    // determine the correct consensus branch ID.  Regtest mode ignores release height.
-    int chainHeight = chainActive.Height() + 1;
-    if (Params().NetworkIDString() != "regtest") {
-        chainHeight = std::max(chainHeight, APPROX_RELEASE_HEIGHT);
-    }
+    // determine the correct consensus branch ID.
+    int chainHeight = std::max(chainActive.Height() + 1, consensusParams.nApproxReleaseHeight);
+
     // Grab the current consensus branch ID
-    auto consensusBranchId = CurrentEpochBranchId(chainHeight, Params().GetConsensus());
+    auto consensusBranchId = CurrentEpochBranchId(chainHeight, consensusParams);
 
     if (params.size() > 4 && !params[4].isNull()) {
         consensusBranchId = ParseHexToUInt32(params[4].get_str());

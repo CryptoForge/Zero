@@ -84,6 +84,7 @@ public:
         strCurrencyUnits = "ZER";
         bip44CoinType = 323; // As registered in https://github.com/satoshilabs/slips/blob/master/slip-0044.md
         consensus.fCoinbaseMustBeProtected = true;
+        consensus.nApproxReleaseHeight = 886075;
         consensus.nFeeStartBlockHeight = 412300;
         consensus.nPreBlossomSubsidyHalvingInterval = Consensus::PRE_BLOSSOM_HALVING_INTERVAL;
         consensus.nPostBlossomSubsidyHalvingInterval = Consensus::POST_BLOSSOM_HALVING_INTERVAL;
@@ -254,6 +255,7 @@ public:
         strCurrencyUnits = "ZET";
         bip44CoinType = 1;
         consensus.fCoinbaseMustBeProtected = true;
+        consensus.nApproxReleaseHeight = 886075;
         consensus.nFeeStartBlockHeight = 1;
         consensus.nPreBlossomSubsidyHalvingInterval = Consensus::PRE_BLOSSOM_HALVING_INTERVAL;
         consensus.nPostBlossomSubsidyHalvingInterval = Consensus::POST_BLOSSOM_HALVING_INTERVAL;
@@ -413,6 +415,7 @@ public:
         strCurrencyUnits = "REG";
         bip44CoinType = 1;
         consensus.fCoinbaseMustBeProtected = false;
+        consensus.nApproxReleaseHeight = std::numeric_limits<int>::max(); // Disabled on regtest
         consensus.nFeeStartBlockHeight = 5000;
         consensus.nPreBlossomSubsidyHalvingInterval = Consensus::PRE_BLOSSOM_REGTEST_HALVING_INTERVAL;
         consensus.nPostBlossomSubsidyHalvingInterval = Consensus::POST_BLOSSOM_REGTEST_HALVING_INTERVAL;

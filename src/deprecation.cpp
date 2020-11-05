@@ -1,4 +1,5 @@
 // Copyright (c) 2017 The Zcash developers
+// Copyright (c) 2017-2020 The LitecoinZ Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -13,13 +14,22 @@
 
 static const std::string CLIENT_VERSION_STR = FormatVersion(CLIENT_VERSION);
 
-void EnforceNodeDeprecation(int nHeight, bool forceLogging, bool fThread) {
+CDeprecation::CDeprecation(const int approxreleaseheight) : approxreleaseheight_(approxreleaseheight)
+{
+    nDeprecationHeight = approxreleaseheight_ + (RELEASE_TO_DEPRECATION_WEEKS * 7 * 24 * EXPECTED_BLOCKS_PER_HOUR);
+}
 
-    // Do not enforce deprecation in regtest or on testnet
-    std::string networkID = Params().NetworkIDString();
-    if (networkID != "main") return;
+CDeprecation::~CDeprecation() {
+}
 
-    int blocksToDeprecation = DEPRECATION_HEIGHT - nHeight;
+int CDeprecation::getDeprecationHeight()
+{
+    return nDeprecationHeight;
+}
+
+void CDeprecation::EnforceNodeDeprecation(int nHeight, bool forceLogging, bool fThread)
+{
+    int blocksToDeprecation = nDeprecationHeight - nHeight;
     if (blocksToDeprecation <= 0) {
         // In order to ensure we only log once per process when deprecation is
         // disabled (to avoid log spam), we only need to log in two cases:
@@ -29,7 +39,7 @@ void EnforceNodeDeprecation(int nHeight, bool forceLogging, bool fThread) {
         // - The node is starting
         if (blocksToDeprecation == 0 || forceLogging) {
             auto msg = strprintf(_("This version has been deprecated as of block height %d."),
-                                 DEPRECATION_HEIGHT) + " " +
+                                 nDeprecationHeight) + " " +
                        _("You should upgrade to the latest version of ZERO.");
             LogPrintf("*** %s\n", msg);
             CAlert::Notify(msg, fThread);
@@ -39,7 +49,7 @@ void EnforceNodeDeprecation(int nHeight, bool forceLogging, bool fThread) {
     } else if (blocksToDeprecation == DEPRECATION_WARN_LIMIT ||
                (blocksToDeprecation < DEPRECATION_WARN_LIMIT && forceLogging)) {
         std::string msg = strprintf(_("This version will be deprecated at block height %d, and will automatically shut down."),
-                            DEPRECATION_HEIGHT) + " " +
+                            nDeprecationHeight) + " " +
                   _("You should upgrade to the latest version of ZERO.");
         LogPrintf("*** %s\n", msg);
         CAlert::Notify(msg, fThread);

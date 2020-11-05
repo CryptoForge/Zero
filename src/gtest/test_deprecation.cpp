@@ -38,7 +38,6 @@ protected:
         uiInterface.ThreadSafeMessageBox.disconnect_all_slots();
         uiInterface.ThreadSafeMessageBox.connect(boost::bind(ThreadSafeMessageBox, &mock_, _1, _2, _3));
         SelectParams(CBaseChainParams::MAIN);
-
     }
 
     virtual void TearDown() {
@@ -62,73 +61,105 @@ protected:
 };
 
 TEST_F(DeprecationTest, NonDeprecatedNodeKeepsRunning) {
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     EXPECT_FALSE(ShutdownRequested());
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT - DEPRECATION_WARN_LIMIT - 1);
+    deprecation.EnforceNodeDeprecation(deprecationHeight - DEPRECATION_WARN_LIMIT - 1);
     EXPECT_FALSE(ShutdownRequested());
 }
 
 TEST_F(DeprecationTest, NodeNearDeprecationIsWarned) {
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     EXPECT_FALSE(ShutdownRequested());
     EXPECT_CALL(mock_, ThreadSafeMessageBox(::testing::_, "", CClientUIInterface::MSG_WARNING));
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT - DEPRECATION_WARN_LIMIT);
+    deprecation.EnforceNodeDeprecation(deprecationHeight - DEPRECATION_WARN_LIMIT);
     EXPECT_FALSE(ShutdownRequested());
 }
 
 TEST_F(DeprecationTest, NodeNearDeprecationWarningIsNotDuplicated) {
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     EXPECT_FALSE(ShutdownRequested());
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT - DEPRECATION_WARN_LIMIT + 1);
+    deprecation.EnforceNodeDeprecation(deprecationHeight - DEPRECATION_WARN_LIMIT + 1);
     EXPECT_FALSE(ShutdownRequested());
 }
 
 TEST_F(DeprecationTest, NodeNearDeprecationWarningIsRepeatedOnStartup) {
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     EXPECT_FALSE(ShutdownRequested());
     EXPECT_CALL(mock_, ThreadSafeMessageBox(::testing::_, "", CClientUIInterface::MSG_WARNING));
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT - DEPRECATION_WARN_LIMIT + 1, true);
+    deprecation.EnforceNodeDeprecation(deprecationHeight - DEPRECATION_WARN_LIMIT + 1, true);
     EXPECT_FALSE(ShutdownRequested());
 }
 
 TEST_F(DeprecationTest, DeprecatedNodeShutsDown) {
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     EXPECT_FALSE(ShutdownRequested());
     EXPECT_CALL(mock_, ThreadSafeMessageBox(::testing::_, "", CClientUIInterface::MSG_ERROR));
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT);
+    deprecation.EnforceNodeDeprecation(deprecationHeight);
     EXPECT_TRUE(ShutdownRequested());
 }
 
 TEST_F(DeprecationTest, DeprecatedNodeErrorIsNotDuplicated) {
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     EXPECT_FALSE(ShutdownRequested());
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT + 1);
+    deprecation.EnforceNodeDeprecation(deprecationHeight + 1);
     EXPECT_TRUE(ShutdownRequested());
 }
 
 TEST_F(DeprecationTest, DeprecatedNodeErrorIsRepeatedOnStartup) {
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     EXPECT_FALSE(ShutdownRequested());
     EXPECT_CALL(mock_, ThreadSafeMessageBox(::testing::_, "", CClientUIInterface::MSG_ERROR));
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT + 1, true);
+    deprecation.EnforceNodeDeprecation(deprecationHeight + 1, true);
     EXPECT_TRUE(ShutdownRequested());
 }
 
 TEST_F(DeprecationTest, DeprecatedNodeIgnoredOnRegtest) {
     SelectParams(CBaseChainParams::REGTEST);
+
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     EXPECT_FALSE(ShutdownRequested());
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT+1);
+    deprecation.EnforceNodeDeprecation(deprecationHeight+1);
     EXPECT_FALSE(ShutdownRequested());
 }
 
 TEST_F(DeprecationTest, DeprecatedNodeIgnoredOnTestnet) {
     SelectParams(CBaseChainParams::TESTNET);
+
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     EXPECT_FALSE(ShutdownRequested());
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT+1);
+    deprecation.EnforceNodeDeprecation(deprecationHeight+1);
     EXPECT_FALSE(ShutdownRequested());
 }
 
 TEST_F(DeprecationTest, AlertNotify) {
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    int deprecationHeight = deprecation.getDeprecationHeight();
+
     boost::filesystem::path temp = GetTempPath() /
         boost::filesystem::unique_path("alertnotify-%%%%.txt");
 
     mapArgs["-alertnotify"] = std::string("echo %s >> ") + temp.string();
 
     EXPECT_CALL(mock_, ThreadSafeMessageBox(::testing::_, "", CClientUIInterface::MSG_WARNING));
-    EnforceNodeDeprecation(DEPRECATION_HEIGHT - DEPRECATION_WARN_LIMIT, false, false);
+    deprecation.EnforceNodeDeprecation(deprecationHeight - DEPRECATION_WARN_LIMIT, false, false);
 
     std::vector<std::string> r = read_lines(temp);
     EXPECT_EQ(r.size(), 1u);
@@ -136,7 +167,7 @@ TEST_F(DeprecationTest, AlertNotify) {
     // -alertnotify restricts the message to safe characters.
     auto expectedMsg = strprintf(
         "This version will be deprecated at block height %d, and will automatically shut down. You should upgrade to the latest version of Zcash.",
-        DEPRECATION_HEIGHT);
+        deprecationHeight);
 
     // Windows built-in echo semantics are different than posixy shells. Quotes and
     // whitespace are printed literally.

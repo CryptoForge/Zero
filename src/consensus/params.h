@@ -118,6 +118,9 @@ struct Params {
     int nPreBlossomSubsidyHalvingInterval;
     int nPostBlossomSubsidyHalvingInterval;
 
+    /** Deprecation block height */
+    int nApproxReleaseHeight;
+
     int Halving(int nHeight) const;
 
     int GetLastFoundersRewardBlockHeight(int nHeight) const;

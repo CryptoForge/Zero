@@ -3559,7 +3559,8 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
     // Update cached incremental witnesses
     GetMainSignals().ChainTip(pindexNew, pblock, oldSproutTree, oldSaplingTree, true);
 
-    EnforceNodeDeprecation(pindexNew->nHeight);
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    deprecation.EnforceNodeDeprecation(pindexNew->nHeight);
 
     int64_t nTime6 = GetTimeMicros(); nTimePostConnect += nTime6 - nTime5; nTimeTotal += nTime6 - nTime1;
     LogPrint("bench", "  - Connect postprocess: %.2fms [%.2fs]\n", (nTime6 - nTime5) * 0.001, nTimePostConnect * 0.000001);
@@ -5089,7 +5090,8 @@ bool static LoadBlockIndexDB()
         DateTimeStrFormat("%Y-%m-%d %H:%M:%S", chainActive.Tip()->GetBlockTime()),
         Checkpoints::GuessVerificationProgress(chainparams.Checkpoints(), chainActive.Tip()));
 
-    EnforceNodeDeprecation(chainActive.Height(), true);
+    CDeprecation deprecation = CDeprecation(Params().GetConsensus().nApproxReleaseHeight);
+    deprecation.EnforceNodeDeprecation(chainActive.Height(), true);
 
     return true;
 }

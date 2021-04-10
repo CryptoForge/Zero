@@ -32,11 +32,12 @@ BITCOIN_INCLUDES=-I$(builddir) -I$(builddir)/obj $(BDB_CPPFLAGS) $(BOOST_CPPFLAG
 BITCOIN_INCLUDES += -I$(srcdir)/secp256k1/include
 BITCOIN_INCLUDES += -I$(srcdir)/univalue/include
 
-LIBBITCOIN_SERVER=libbitcoin_server.a
+LIBBITCOIN_SERVER=libbitcoin_server.a -lcurl -larchive
 LIBBITCOIN_COMMON=libbitcoin_common.a
 LIBBITCOIN_CLI=libbitcoin_cli.a
 LIBBITCOIN_UTIL=libbitcoin_util.a
 LIBBITCOIN_CRYPTO=crypto/libbitcoin_crypto.a
+LIBBITCOINQT=qt/libzeroqt.a
 LIBSECP256K1=secp256k1/libsecp256k1.la
 LIBUNIVALUE=univalue/libunivalue.la
 LIBZCASH=libzcash.a
@@ -95,9 +96,11 @@ LIBZCASH_H = \
   zcash/Note.hpp \
   zcash/prf.h \
   zcash/Proof.hpp \
+	zcash/address/sapling.hpp \
+	zcash/address/sprout.hpp \
   zcash/util.h \
   zcash/Zcash.h \
-  zcash/zip32.h
+  zcash/address/zip32.h
 
 .PHONY: FORCE check-symbols check-security
 # bitcoin core #
@@ -105,6 +108,7 @@ BITCOIN_CORE_H = \
 	addressindex.h \
 	zeronode/activezeronode.h \
   addrman.h \
+	addrdb.h \
   alert.h \
   amount.h \
   amqp/amqpabstractnotifier.h \
@@ -139,6 +143,7 @@ BITCOIN_CORE_H = \
   core_io.h \
   core_memusage.h \
   deprecation.h \
+	fs.h \
   hash.h \
   httprpc.h \
   httpserver.h \
@@ -164,6 +169,7 @@ BITCOIN_CORE_H = \
   netbase.h \
   noui.h \
 	zeronode/obfuscation.h \
+	params.h \
   policy/fees.h \
   pow.h \
   prevector.h \
@@ -220,6 +226,7 @@ BITCOIN_CORE_H = \
   wallet/asyncrpcoperation_mergetoaddress.h \
   wallet/asyncrpcoperation_saplingmigration.h \
 	wallet/asyncrpcoperation_saplingconsolidation.h \
+	wallet/asyncrpcoperation_sweeptoaddress.h \
   wallet/asyncrpcoperation_sendmany.h \
   wallet/asyncrpcoperation_shieldcoinbase.h \
   wallet/crypter.h \
@@ -250,6 +257,7 @@ libbitcoin_server_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 libbitcoin_server_a_SOURCES = \
   sendalert.cpp \
   addrman.cpp \
+	addrdb.cpp \
   alert.cpp \
   alertkeys.h \
   asyncrpcoperation.cpp \
@@ -257,6 +265,7 @@ libbitcoin_server_a_SOURCES = \
   bloom.cpp \
   chain.cpp \
   checkpoints.cpp \
+	fs.cpp \
   deprecation.cpp \
   httprpc.cpp \
   httpserver.cpp \
@@ -268,6 +277,7 @@ libbitcoin_server_a_SOURCES = \
   miner.cpp \
   net.cpp \
   noui.cpp \
+	params.cpp \
   policy/fees.cpp \
   pow.cpp \
   rest.cpp \
@@ -323,6 +333,7 @@ libbitcoin_wallet_a_SOURCES = \
   wallet/asyncrpcoperation_mergetoaddress.cpp \
   wallet/asyncrpcoperation_saplingmigration.cpp \
 	wallet/asyncrpcoperation_saplingconsolidation.cpp \
+	wallet/asyncrpcoperation_sweeptoaddress.cpp \
   wallet/asyncrpcoperation_sendmany.cpp \
   wallet/asyncrpcoperation_shieldcoinbase.cpp \
   wallet/crypter.cpp \
@@ -343,7 +354,8 @@ libbitcoin_wallet_a_SOURCES = \
   wallet/wallet.cpp \
   wallet/wallet_ismine.cpp \
   wallet/walletdb.cpp \
-	wallet/witness.cpp \
+  wallet/witness.cpp \
+  zcash/address/zip32.cpp \
   $(BITCOIN_CORE_H) \
   $(LIBZCASH_H)
 
@@ -548,7 +560,9 @@ libzcash_a_SOURCES = \
   zcash/Note.cpp \
   zcash/prf.cpp \
   zcash/util.cpp \
-  zcash/zip32.cpp
+	zcash/address/sapling.cpp \
+	zcash/address/sprout.cpp \
+  zcash/address/zip32.cpp
 
 libzcash_a_CPPFLAGS = $(AM_CPPFLAGS) $(PIC_FLAGS) -DBINARY_OUTPUT -DCURVE_ALT_BN128 -DBOOST_SPIRIT_THREADSAFE -fvisibility=hidden -DSTATIC $(BITCOIN_INCLUDES)
 libzcash_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
@@ -627,4 +641,8 @@ endif
 if ENABLE_TESTS
 include Makefile.test.include
 include Makefile.gtest.include
+endif
+
+if ENABLE_QT
+include Makefile.qt.include
 endif

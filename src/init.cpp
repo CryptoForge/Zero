@@ -19,6 +19,7 @@
 #include "httpserver.h"
 #include "httprpc.h"
 #include "key.h"
+#include "params.h"
 #ifdef ENABLE_MINING
 #include "key_io.h"
 #endif
@@ -49,6 +50,7 @@
 #include "wallet/wallet.h"
 #include "wallet/walletdb.h"
 #include "wallet/asyncrpcoperation_saplingconsolidation.h"
+#include "wallet/asyncrpcoperation_sweeptoaddress.h"
 #endif
 #include <stdint.h>
 #include <stdio.h>
@@ -354,6 +356,7 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-blocknotify=<cmd>", _("Execute command when the best block changes (%s in cmd is replaced by block hash)"));
     strUsage += HelpMessageOpt("-checkblocks=<n>", strprintf(_("How many blocks to check at startup (default: %u, 0 = all)"), 288));
     strUsage += HelpMessageOpt("-checklevel=<n>", strprintf(_("How thorough the block verification of -checkblocks is (0-4, default: %u)"), 3));
+    strUsage += HelpMessageOpt("-clientname=<SomeName>", _("Full node client name, default 'Draco'"));
     strUsage += HelpMessageOpt("-conf=<file>", strprintf(_("Specify configuration file (default: %s)"), "zero.conf"));
     if (mode == HMM_BITCOIND)
     {
@@ -372,15 +375,15 @@ std::string HelpMessage(HelpMessageMode mode)
 #ifndef WIN32
     strUsage += HelpMessageOpt("-pid=<file>", strprintf(_("Specify pid file (default: %s)"), "zerod.pid"));
 #endif
-    strUsage += HelpMessageOpt("-prune=<n>", strprintf(_("Reduce storage requirements by pruning (deleting) old blocks. This mode disables wallet support and is incompatible with -txindex. "
-            "Warning: Reverting this setting requires re-downloading the entire blockchain. "
-            "(default: 0 = disable pruning blocks, >%u = target size in MiB to use for block files)"), MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024));
+    // strUsage += HelpMessageOpt("-prune=<n>", strprintf(_("Reduce storage requirements by pruning (deleting) old blocks. This mode disables wallet support and is incompatible with -txindex. "
+    //         "Warning: Reverting this setting requires re-downloading the entire blockchain. "
+    //         "(default: 0 = disable pruning blocks, >%u = target size in MiB to use for block files)"), MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024));
+    strUsage += HelpMessageOpt("-bootstrap", _("Download and install bootstrap on startup (1 to show GUI prompt, 2 to force download when using CLI)"));
     strUsage += HelpMessageOpt("-reindex", _("Rebuild block chain index from current blk000??.dat files on startup"));
 #if !defined(WIN32)
     strUsage += HelpMessageOpt("-sysperms", _("Create new files with system default permissions, instead of umask 077 (only effective with disabled wallet functionality)"));
 #endif
-    strUsage += HelpMessageOpt("-txindex", strprintf(_("Maintain a full transaction index, used by the getrawtransaction rpc call (default: %u)"), 0));
-
+    // strUsage += HelpMessageOpt("-txindex", strprintf(_("Maintain a full transaction index, used by the getrawtransaction rpc call (default: %u)"), 0));
     // strUsage += HelpMessageOpt("-addressindex", strprintf(_("Maintain a full address index, used to query for the balance, txids and unspent outputs for addresses (default: %u)"), DEFAULT_ADDRESSINDEX));
     // strUsage += HelpMessageOpt("-timestampindex", strprintf(_("Maintain a timestamp index for block hashes, used to query blocks hashes by a range of timestamps (default: %u)"), DEFAULT_TIMESTAMPINDEX));
     // strUsage += HelpMessageOpt("-spentindex", strprintf(_("Maintain a full spent index, used to query the spending txid and input index for an outpoint (default: %u)"), DEFAULT_SPENTINDEX));
@@ -429,8 +432,11 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-migration", _("Enable the Sprout to Sapling migration"));
     strUsage += HelpMessageOpt("-migrationdestaddress=<zaddr>", _("Set the Sapling migration address"));
     strUsage += HelpMessageOpt("-consolidation", _("Enable auto Sapling note consolidation"));
-    strUsage += HelpMessageOpt("-consolidatesaplingaddress=<zaddr>", _("Specify Sapling Address to Consolidate. (default: all)"));
+    strUsage += HelpMessageOpt("-consolidatesaplingaddress=<zaddr>", _("Specify Sapling Address to Consolidate. Consolidation address must be the same as sweep  (default: all)"));
     strUsage += HelpMessageOpt("-consolidationtxfee", strprintf(_("Fee amount in Satoshis used send consolidation transactions. (default %i)"), DEFAULT_CONSOLIDATION_FEE));
+    strUsage += HelpMessageOpt("-sweep", _("Enable auto Sapling note sweep, automatically move all funds to a sigle address periodocally."));
+    strUsage += HelpMessageOpt("-sweepsaplingaddress=<zaddr>", _("Specify Sapling Address to Sweep funds to. (default: all)"));
+    strUsage += HelpMessageOpt("-sweeptxfee", strprintf(_("Fee amount in Satoshis used send sweep transactions. (default %i)"), DEFAULT_SWEEP_FEE));
     strUsage += HelpMessageOpt("-deletetx", _("Enable Old Transaction Deletion"));
     strUsage += HelpMessageOpt("-deleteinterval", strprintf(_("Delete transaction every <n> blocks during inital block download (default: %i)"), DEFAULT_TX_DELETE_INTERVAL));
     strUsage += HelpMessageOpt("-keeptxnum", strprintf(_("Keep the last <n> transactions (default: %i)"), DEFAULT_TX_RETENTION_LASTTX));
@@ -576,13 +582,18 @@ std::string HelpMessage(HelpMessageMode mode)
     return strUsage;
 }
 
-static void BlockNotifyCallback(const uint256& hashNewTip)
+static void BlockNotifyCallback(bool initialSync, const CBlockIndex *pBlockIndex)
 {
-    std::string strCmd = GetArg("-blocknotify", "");
+    if (initialSync || !pBlockIndex)
+        return;
 
-    boost::replace_all(strCmd, "%s", hashNewTip.GetHex());
-    boost::thread t(runCommand, strCmd); // thread runs free
+    std::string strCmd = GetArg("-blocknotify", "");
+    if (!strCmd.empty()) {
+        boost::replace_all(strCmd, "%s", pBlockIndex->GetBlockHash().GetHex());
+        boost::thread t(runCommand, strCmd); // thread runs free
+    }
 }
+
 
 struct CImportingNow
 {
@@ -733,7 +744,7 @@ bool InitSanityCheck(void)
 
 
 static void ZC_LoadParams(
-    const CChainParams& chainparams
+    const CChainParams& chainparams, bool verified
 )
 {
     struct timeval tv_start, tv_end;
@@ -743,19 +754,17 @@ static void ZC_LoadParams(
     boost::filesystem::path sapling_output = ZC_GetParamsDir() / "sapling-output.params";
     boost::filesystem::path sprout_groth16 = ZC_GetParamsDir() / "sprout-groth16.params";
 
-    if (!(
-        boost::filesystem::exists(sapling_spend) &&
-        boost::filesystem::exists(sapling_output) &&
-        boost::filesystem::exists(sprout_groth16)
-    )) {
-        uiInterface.ThreadSafeMessageBox(strprintf(
-            _("Cannot find the Zero network parameters in the following directory:\n"
-              "%s\n"
-              "Please run 'zero-fetch-params' or './zcutil/fetch-params.sh' and then restart."),
-                ZC_GetParamsDir()),
-            "", CClientUIInterface::MSG_ERROR);
-        StartShutdown();
-        return;
+    if (!verified) {
+        if (!checkParams()) {
+          uiInterface.ThreadSafeMessageBox(strprintf(
+              _("Network parameters checksums failed:\n"
+                "%s\n"
+                "Please restart the wallet to re-download."),
+                  ZC_GetParamsDir()),
+              "", CClientUIInterface::MSG_ERROR);
+          StartShutdown();
+          return;
+        }
     }
 
     pzcashParams = ZCJoinSplit::Prepared();
@@ -885,8 +894,6 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
             return InitError(_("Payment disclosure requires -experimentalfeatures."));
         } else if (mapArgs.count("-zmergetoaddress")) {
             return InitError(_("RPC method z_mergetoaddress requires -experimentalfeatures."));
-        } else if (mapArgs.count("-insightexplorer")) {
-            return InitError(_("Insight explorer requires -experimentalfeatures."));
         }
     }
 
@@ -964,18 +971,18 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
 
     // if using block pruning, then disable txindex
     // also disable the wallet (for now, until SPV support is implemented in wallet)
-    if (GetArg("-prune", 0)) {
-        if (GetBoolArg("-txindex", false))
-            return InitError(_("Prune mode is incompatible with -txindex."));
-#ifdef ENABLE_WALLET
-        if (!GetBoolArg("-disablewallet", false)) {
-            if (SoftSetBoolArg("-disablewallet", true))
-                LogPrintf("%s : parameter interaction: -prune -> setting -disablewallet=1\n", __func__);
-            else
-                return InitError(_("Can't run with a wallet in prune mode."));
-        }
-#endif
-    }
+//     if (GetArg("-prune", 0)) {
+//         if (GetBoolArg("-txindex", true))
+//             return InitError(_("Prune mode is incompatible with -txindex."));
+// #ifdef ENABLE_WALLET
+//         if (!GetBoolArg("-disablewallet", false)) {
+//             if (SoftSetBoolArg("-disablewallet", true))
+//                 LogPrintf("%s : parameter interaction: -prune -> setting -disablewallet=1\n", __func__);
+//             else
+//                 return InitError(_("Can't run with a wallet in prune mode."));
+//         }
+// #endif
+//     }
 
     // ********************************************************* Step 3: parameter-to-internal-flags
 
@@ -1033,18 +1040,18 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     fServer = GetBoolArg("-server", false);
 
     // block pruning; get the amount of disk space (in MB) to allot for block & undo files
-    int64_t nSignedPruneTarget = GetArg("-prune", 0) * 1024 * 1024;
-    if (nSignedPruneTarget < 0) {
-        return InitError(_("Prune cannot be configured with a negative value."));
-    }
-    nPruneTarget = (uint64_t) nSignedPruneTarget;
-    if (nPruneTarget) {
-        if (nPruneTarget < MIN_DISK_SPACE_FOR_BLOCK_FILES) {
-            return InitError(strprintf(_("Prune configured below the minimum of %d MB.  Please use a higher number."), MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024));
-        }
-        LogPrintf("Prune configured to target %uMiB on disk for block and undo files.\n", nPruneTarget / 1024 / 1024);
-        fPruneMode = true;
-    }
+    // int64_t nSignedPruneTarget = GetArg("-prune", 0) * 1024 * 1024;
+    // if (nSignedPruneTarget < 0) {
+    //     return InitError(_("Prune cannot be configured with a negative value."));
+    // }
+    // nPruneTarget = (uint64_t) nSignedPruneTarget;
+    // if (nPruneTarget) {
+    //     if (nPruneTarget < MIN_DISK_SPACE_FOR_BLOCK_FILES) {
+    //         return InitError(strprintf(_("Prune configured below the minimum of %d MB.  Please use a higher number."), MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024));
+    //     }
+    //     LogPrintf("Prune configured to target %uMiB on disk for block and undo files.\n", nPruneTarget / 1024 / 1024);
+    //     fPruneMode = true;
+    // }
 
     RegisterAllCoreRPCCommands(tableRPC);
 #ifdef ENABLE_WALLET
@@ -1289,7 +1296,26 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     uiInterface.InitMessage(_("Initializing..."));
 
     // Initialize Zcash circuit parameters
-    ZC_LoadParams(chainparams);
+    uiInterface.InitMessage(_("Verifying Params..."));
+    initalizeMapParam();
+    bool paramsVerified = checkParams();
+    if(!paramsVerified) {
+        downloadFiles("Network Params");
+    }
+    if (fRequestShutdown)
+    {
+        LogPrintf("Shutdown requested. Exiting.\n");
+        return false;
+    }
+
+    ZC_LoadParams(chainparams, paramsVerified);
+
+
+    if (fRequestShutdown)
+    {
+        LogPrintf("Shutdown requested. Exiting.\n");
+        return false;
+    }
 
     if (mapArgs.count("-sporkkey")) // spork priv key
     {
@@ -1465,6 +1491,59 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
 
     fReindex = GetBoolArg("-reindex", false);
 
+    bool useBootstrap = false;
+    bool newInstall = GetBoolArg("-bootstrapinstall", false);
+    if (!boost::filesystem::exists(GetDataDir() / "blocks") || !boost::filesystem::exists(GetDataDir() / "chainstate"))
+        newInstall = true;
+
+    //Prompt on new install
+    if (newInstall && !GetBoolArg("-bootstrap", false)) {
+        bool fBoot = uiInterface.ThreadSafeMessageBox(
+            "\n\n" + _("New install detected.\n\nPress OK to download the blockchain bootstrap."),
+            "", CClientUIInterface::ICON_INFORMATION | CClientUIInterface::MSG_INFORMATION | CClientUIInterface::MODAL | CClientUIInterface::BTN_OK | CClientUIInterface::BTN_CANCEL);
+        if (fBoot) {
+            useBootstrap = true;
+        }
+    }
+
+    //Prompt GUI
+    if (GetBoolArg("-bootstrap", false) && GetArg("-bootstrap", "1") != "2" && !useBootstrap) {
+        bool fBoot = uiInterface.ThreadSafeMessageBox(
+            "\n\n" + _("Bootstrap option detected.\n\nPress OK to download the blockchain bootstrap."),
+            "", CClientUIInterface::ICON_INFORMATION | CClientUIInterface::MSG_INFORMATION | CClientUIInterface::MODAL | CClientUIInterface::BTN_OK | CClientUIInterface::BTN_CANCEL);
+        if (fBoot) {
+            useBootstrap = true;
+        }
+    }
+
+    //Force Download- used for CLI
+    if (GetBoolArg("-bootstrap", false) && GetArg("-bootstrap", "1") == "2") {
+        useBootstrap = true;
+    }
+
+    if (useBootstrap) {
+        fReindex = false;
+        //wipe transactions from wallet to create a clean slate
+        OverrideSetArg("-zappwallettxes","2");
+        boost::filesystem::remove_all(GetDataDir() / "blocks");
+        boost::filesystem::remove_all(GetDataDir() / "chainstate");
+        if (!getBootstrap() && !fRequestShutdown ) {
+            bool keepRunning = uiInterface.ThreadSafeMessageBox(
+                "\n\n" + _("Bootstrap download failed!!!\n\nPress OK to continue and sync from the network."),
+                "", CClientUIInterface::ICON_INFORMATION | CClientUIInterface::MSG_INFORMATION | CClientUIInterface::MODAL | CClientUIInterface::BTN_OK | CClientUIInterface::BTN_CANCEL);
+
+            if (!keepRunning) {
+                fRequestShutdown = true;
+            }
+        }
+    }
+
+    if (fRequestShutdown)
+    {
+        LogPrintf("Shutdown requested. Exiting.\n");
+        return false;
+    }
+
     // Upgrading to 0.8; hard-link the old blknnnn.dat files into /blocks/
     boost::filesystem::path blocksDir = GetDataDir() / "blocks";
     if (!boost::filesystem::exists(blocksDir))
@@ -1497,14 +1576,14 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     nTotalCache = std::max(nTotalCache, nMinDbCache << 20); // total cache cannot be less than nMinDbCache
     nTotalCache = std::min(nTotalCache, nMaxDbCache << 20); // total cache cannot be greated than nMaxDbcache
     int64_t nBlockTreeDBCache = nTotalCache / 8;
-    if (nBlockTreeDBCache > (1 << 21) && !GetBoolArg("-txindex", false))
-        nBlockTreeDBCache = (1 << 21); // block tree db cache shouldn't be larger than 2 MiB
+    // if (nBlockTreeDBCache > (1 << 21) && !GetBoolArg("-txindex", false))
+    //     nBlockTreeDBCache = (1 << 21); // block tree db cache shouldn't be larger than 2 MiB
 
     // https://github.com/bitpay/bitcoin/commit/c91d78b578a8700a45be936cb5bb0931df8f4b87#diff-c865a8939105e6350a50af02766291b7R1233
     if (GetBoolArg("-insightexplorer", false)) {
-        if (!GetBoolArg("-txindex", false)) {
-            return InitError(_("-insightexplorer requires -txindex."));
-        }
+        // if (!GetBoolArg("-txindex", false)) {
+        //     return InitError(_("-insightexplorer requires -txindex."));
+        // }
         // increase cache if additional indices are needed
         nBlockTreeDBCache = nTotalCache * 3 / 4;
     }
@@ -1516,6 +1595,62 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     LogPrintf("* Using %.1fMiB for block index database\n", nBlockTreeDBCache * (1.0 / 1024 / 1024));
     LogPrintf("* Using %.1fMiB for chain state database\n", nCoinDBCache * (1.0 / 1024 / 1024));
     LogPrintf("* Using %.1fMiB for in-memory UTXO set\n", nCoinCacheUsage * (1.0 / 1024 / 1024));
+
+    if ( fReindex == 0 ){
+
+        bool checkval;
+        pblocktree = new CBlockTreeDB(nBlockTreeDBCache, false, fReindex);
+
+        //One time reindex to enable transaction archiving.
+        pblocktree->ReadFlag("archiverule", checkval);
+        if (checkval != fArchive)
+        {
+            pblocktree->WriteFlag("archiverule", fArchive);
+            LogPrintf("Transaction archive not set, will reindex. could take a while.\n");
+            fReindex = true;
+        }
+
+        //Check txindex
+        pblocktree->ReadFlag("txindex", checkval);
+        if ( checkval != fTxIndex)
+        {
+            pblocktree->WriteFlag("txindex", fTxIndex);
+            LogPrintf("set txindex, will reindex. could take a while.\n");
+            fReindex = true;
+        }
+
+        //Check prune mode
+        pblocktree->ReadFlag("prunedblockfiles", checkval);
+        if ( checkval != fPruneMode)
+        {
+            pblocktree->WriteFlag("prunedblockfiles", fPruneMode);
+            LogPrintf("set prunemode, will reindex. could take a while.\n");
+            fReindex = true;
+        }
+
+        //Check Insight Index
+        fInsightExplorer = GetBoolArg("-insightexplorer", false);
+        pblocktree->ReadFlag("insightexplorer", checkval);
+        if ( checkval != fInsightExplorer )
+        {
+            pblocktree->WriteFlag("insightexplorer", fInsightExplorer);
+            LogPrintf("set insightexplorer, will reindex. could take a while.\n");
+            fReindex = true;
+        }
+
+        //Check Insight Index
+        fZindex = GetBoolArg("-zindex", DEFAULT_SHIELDEDINDEX);
+        pblocktree->ReadFlag("zindex", checkval);
+        if ( checkval != fZindex )
+        {
+            pblocktree->WriteFlag("zindex", fZindex);
+            LogPrintf("set zindex, will reindex. could take a while.\n");
+            fReindex = true;
+        }
+    }
+
+    chainMaxHeight = GetArg("-maxheight", 0);
+
 
     bool clearWitnessCaches = false;
 
@@ -1570,28 +1705,28 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                 }
 
                 // Check for changed -txindex state
-                if (fTxIndex != GetBoolArg("-txindex", false)) {
-                    strLoadError = _("You need to rebuild the database using -reindex to change -txindex");
-                    break;
-                }
+                // if (fTxIndex != GetBoolArg("-txindex", true)) {
+                //     strLoadError = _("You need to rebuild the database using -reindex to change -txindex");
+                //     break;
+                // }
 
                 // Check for changed -insightexplorer state
-                if (fInsightExplorer != GetBoolArg("-insightexplorer", false)) {
-                    strLoadError = _("You need to rebuild the database using -reindex to change -insightexplorer");
-                    break;
-                }
+                // if (fInsightExplorer != GetBoolArg("-insightexplorer", false)) {
+                //     strLoadError = _("You need to rebuild the database using -reindex to change -insightexplorer");
+                //     break;
+                // }
 
-                if (fZindex != GetBoolArg("-zindex", false)) {
-                    strLoadError = _("You need to rebuild the database using -reindex to change -zindex");
-                    break;
-                }
+                // if (fZindex != GetBoolArg("-zindex", false)) {
+                //     strLoadError = _("You need to rebuild the database using -reindex to change -zindex");
+                //     break;
+                // }
 
                 // Check for changed -prune state.  What we are concerned about is a user who has pruned blocks
                 // in the past, but is now trying to run unpruned.
-                if (fHavePruned && !fPruneMode) {
-                    strLoadError = _("You need to rebuild the database using -reindex to go back to unpruned mode.  This will redownload the entire blockchain");
-                    break;
-                }
+                // if (fHavePruned && !fPruneMode) {
+                //     strLoadError = _("You need to rebuild the database using -reindex to go back to unpruned mode.  This will redownload the entire blockchain");
+                //     break;
+                // }
 
                 if (!fReindex) {
                     uiInterface.InitMessage(_("Rewinding blocks if needed..."));
@@ -1711,6 +1846,56 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                 strErrors << _("Error loading wallet.zero") << "\n";
         }
 
+        uiInterface.InitMessage(_("Validating transaction archive..."));
+        bool fInitializeArcTx = pwalletMain->initalizeArcTx();
+        if(!fInitializeArcTx) {
+          //ArcTx validation failed, delete wallet point and clear vWtx
+          delete pwalletMain;
+          pwalletMain = NULL;
+          vWtx.clear();
+
+          //Zap All Transactions
+          uiInterface.InitMessage(_("Transaction archive not initalized, Zapping all transactions..."));
+          LogPrintf("Transaction archive not initalized, Zapping all transactions.\n");
+          pwalletMain = new CWallet(strWalletFile);
+          DBErrors nZapWalletRet = pwalletMain->ZapWalletTx(vWtx);
+          if (nZapWalletRet != DB_LOAD_OK) {
+              uiInterface.InitMessage(_("Error loading wallet.zero: Wallet corrupted"));
+              return false;
+          }
+
+          delete pwalletMain;
+          pwalletMain = NULL;
+
+          //Reload Wallet
+          uiInterface.InitMessage(_("Reloading wallet, set to rescan..."));
+          pwalletMain = new CWallet(strWalletFile);
+          DBErrors nLoadWalletRet = pwalletMain->LoadWallet(fFirstRun);
+          if (nLoadWalletRet != DB_LOAD_OK)
+          {
+              if (nLoadWalletRet == DB_CORRUPT)
+                  strErrors << _("Error loading wallet.zero: Wallet corrupted") << "\n";
+              else if (nLoadWalletRet == DB_NONCRITICAL_ERROR)
+              {
+                  string msg(_("Warning: error reading wallet.zero! All keys read correctly, but transaction data"
+                               " or address book entries might be missing or incorrect."));
+                  InitWarning(msg);
+              }
+              else if (nLoadWalletRet == DB_TOO_NEW)
+                  strErrors << _("Error loading wallet.zero: Wallet requires newer version of Bitcoin Core") << "\n";
+
+              else if (nLoadWalletRet == DB_NEED_REWRITE)
+              {
+                  strErrors << _("Wallet needed to be rewritten: restart Zero to complete") << "\n";
+                  LogPrintf("%s", strErrors.str());
+                  return InitError(strErrors.str());
+              }
+              else
+                  strErrors << _("Error loading wallet.zero") << "\n";
+          }
+
+        }
+
         if (GetBoolArg("-upgradewallet", fFirstRun))
         {
             int nMaxVersion = GetArg("-upgradewallet", 0);
@@ -1734,6 +1919,10 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
             if (!pwalletMain->IsCrypted()) {
                 // generate a new HD seed
                 pwalletMain->GenerateNewSeed();
+
+                // generate 1 address
+                auto zAddress = pwalletMain->GenerateNewSaplingZKey();
+                pwalletMain->SetZAddressBook(zAddress, "z-sapling", "");
             }
         }
 
@@ -1752,6 +1941,47 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
             auto zAddress = DecodePaymentAddress(vaddresses[i]);
             if (!IsValidPaymentAddress(zAddress)) {
                 return InitError("Invalid consolidation address");
+            }
+        }
+
+        //Set Sapling Sweep
+        pwalletMain->fSaplingSweepEnabled = GetBoolArg("-sweep", false);
+
+        if (pwalletMain->fSaplingSweepEnabled) {
+            fSweepTxFee  = GetArg("-sweeptxfee", DEFAULT_SWEEP_FEE);
+            fSweepMapUsed = !mapMultiArgs["-sweepsaplingaddress"].empty();
+
+            //Validate Sapling Addresses
+            vector<string>& vSweep = mapMultiArgs["-sweepsaplingaddress"];
+            if (vSweep.size() != 1) {
+                return InitError("A single sweep address must be specified.");
+            }
+
+            for (int i = 0; i < vSweep.size(); i++) {
+                LogPrintf("Sweep Sapling Address: %s\n", vSweep[i]);
+                auto zSweep = DecodePaymentAddress(vSweep[i]);
+                if (!IsValidPaymentAddress(zSweep)) {
+                    return InitError("Invalid sweep address");
+                }
+                auto hasSpendingKey = boost::apply_visitor(HaveSpendingKeyForPaymentAddress(pwalletMain), zSweep);
+                if (!hasSpendingKey) {
+                    return InitError("Wallet must have the spending key of sweep address");
+                }
+            }
+
+            if (pwalletMain->fSaplingConsolidationEnabled) {
+                //Validate 1 Consolidation address only that matches the sweep address
+                vector<string>& vaddresses = mapMultiArgs["-consolidatesaplingaddress"];
+                if (vaddresses.size() == 0) {
+                    fConsolidationMapUsed = true;
+                    mapMultiArgs["-consolidatesaplingaddress"] = vSweep;
+                } else {
+                    for (int i = 0; i < vaddresses.size(); i++) {
+                        if (vSweep[0] != vaddresses[i]) {
+                            return InitError("Consolidation can only be used on the sweep address when sweep is enabled.");
+                        }
+                    }
+                }
             }
         }
 
@@ -1778,6 +2008,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
 
         if (fFirstRun)
         {
+            useBootstrap = false;
             // Create new keyUser and set as default key
             CPubKey newDefaultKey;
             if (pwalletMain->GetKeyFromPool(newDefaultKey)) {
@@ -1795,7 +2026,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
         RegisterValidationInterface(pwalletMain);
 
         CBlockIndex *pindexRescan = chainActive.Tip();
-        if (clearWitnessCaches || GetBoolArg("-rescan", false))
+        if (clearWitnessCaches || GetBoolArg("-rescan", false) || !fInitializeArcTx || useBootstrap)
         {
             pwalletMain->ClearNoteWitnessCache();
             pindexRescan = chainActive.Genesis();
@@ -1820,7 +2051,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
             nWalletDBUpdated++;
 
             // Restore wallet transaction metadata after -zapwallettxes=1
-            if (GetBoolArg("-zapwallettxes", false) && GetArg("-zapwallettxes", "1") != "2")
+            if (GetBoolArg("-zapwallettxes", false) && GetArg("-zapwallettxes", "1") != "2" && fInitializeArcTx)
             {
                 CWalletDB walletdb(strWalletFile);
 
@@ -1845,6 +2076,8 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
             }
         }
         pwalletMain->SetBroadcastTransactions(GetBoolArg("-walletbroadcast", true));
+
+        vpwallets.push_back(pwalletMain);
     } // (!fDisableWallet)
 #else // ENABLE_WALLET
     LogPrintf("No wallet support compiled in!\n");

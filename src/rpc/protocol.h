@@ -50,7 +50,8 @@ enum RPCErrorCode
     RPC_VERIFY_REJECTED             = -26, //! Transaction or block was rejected by network rules
     RPC_VERIFY_ALREADY_IN_CHAIN     = -27, //! Transaction already in chain
     RPC_IN_WARMUP                   = -28, //! Client still warming up
-    RPC_DISABLED_BEFORE_WITNESSES   = -31, //! Disable before Note Witnesses have been built
+    RPC_DISABLED_BEFORE_WITNESSES   = -31, //! Do not allow z_sendmany prior to building witnesses
+    RPC_BUILDING_WITNESS_CACHE      = -32, //! Return error while builing witness cache
 
     //! Aliases for backward compatibility
     RPC_TRANSACTION_ERROR           = RPC_VERIFY_ERROR,
@@ -75,6 +76,8 @@ enum RPCErrorCode
     RPC_WALLET_WRONG_ENC_STATE      = -15, //! Command given in wrong wallet encryption state (encrypting an encrypted wallet etc.)
     RPC_WALLET_ENCRYPTION_FAILED    = -16, //! Failed to encrypt the wallet
     RPC_WALLET_ALREADY_UNLOCKED     = -17, //! Wallet is already unlocked
+
+    RPC_ZERONODES_NOT_SYNCED        = -32, //! ZeroNodes are syncing or have fallen out of sync
 };
 
 std::string JSONRPCRequest(const std::string& strMethod, const UniValue& params, const UniValue& id);

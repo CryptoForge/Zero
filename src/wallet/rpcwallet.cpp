@@ -21,7 +21,7 @@
 #include "primitives/transaction.h"
 #include "zcbenchmarks.h"
 #include "script/interpreter.h"
-#include "zcash/zip32.h"
+#include "zcash/address/zip32.h"
 
 #include "utiltime.h"
 #include "asyncrpcoperation.h"
@@ -2597,10 +2597,10 @@ UniValue z_listunspent(const UniValue& params, bool fHelp)
             obj.push_back(Pair("outindex", (int)entry.op.n));
             obj.push_back(Pair("confirmations", entry.confirmations));
             libzcash::SaplingIncomingViewingKey ivk;
-            libzcash::SaplingFullViewingKey fvk;
+            libzcash::SaplingExtendedFullViewingKey extfvk;
             pwalletMain->GetSaplingIncomingViewingKey(boost::get<libzcash::SaplingPaymentAddress>(entry.address), ivk);
-            pwalletMain->GetSaplingFullViewingKey(ivk, fvk);
-            bool hasSaplingSpendingKey = pwalletMain->HaveSaplingSpendingKey(fvk);
+            pwalletMain->GetSaplingFullViewingKey(ivk, extfvk);
+            bool hasSaplingSpendingKey = pwalletMain->HaveSaplingSpendingKey(extfvk);
             obj.push_back(Pair("spendable", hasSaplingSpendingKey));
             obj.push_back(Pair("address", EncodePaymentAddress(entry.address)));
             obj.push_back(Pair("amount", ValueFromAmount(CAmount(entry.note.value())))); // note.value() is equivalent to plaintext.value()
@@ -3216,11 +3216,7 @@ UniValue z_listaddresses(const UniValue& params, bool fHelp)
         libzcash::SaplingIncomingViewingKey ivk;
         libzcash::SaplingFullViewingKey fvk;
         for (auto addr : addresses) {
-            if (fIncludeWatchonly || (
-                pwalletMain->GetSaplingIncomingViewingKey(addr, ivk) &&
-                pwalletMain->GetSaplingFullViewingKey(ivk, fvk) &&
-                pwalletMain->HaveSaplingSpendingKey(fvk)
-            )) {
+            if (fIncludeWatchonly || HaveSpendingKeyForPaymentAddress(pwalletMain)(addr)) {
                 ret.push_back(EncodePaymentAddress(addr));
             }
         }
@@ -3659,9 +3655,9 @@ UniValue z_viewtransaction(const UniValue& params, bool fHelp)
         auto pa = decrypted.second;
 
         // Store the OutgoingViewingKey for recovering outputs
-        libzcash::SaplingFullViewingKey fvk;
-        assert(pwalletMain->GetSaplingFullViewingKey(wtxPrev.mapSaplingNoteData.at(op).ivk, fvk));
-        ovks.insert(fvk.ovk);
+        libzcash::SaplingExtendedFullViewingKey extfvk;
+        assert(pwalletMain->GetSaplingFullViewingKey(wtxPrev.mapSaplingNoteData.at(op).ivk, extfvk));
+        ovks.insert(extfvk.fvk.ovk);
 
         UniValue entry(UniValue::VOBJ);
         entry.push_back(Pair("type", ADDR_TYPE_SAPLING));
@@ -4483,6 +4479,91 @@ UniValue z_shieldcoinbase(const UniValue& params, bool fHelp)
     return o;
 }
 
+// UniValue enableconsolidation(const UniValue& params, bool fHelp, const CPubKey& mypk)
+// {
+//
+//     if (!EnsureWalletIsAvailable(fHelp))
+//         return NullUniValue;
+//
+//     if (fHelp || params.size() != 1)
+//         throw runtime_error(
+//             "enableconsolidation true/false\n"
+//             "\nEnable or Disable consolidation function in a running node."
+//             "}\n"
+//             "\nExamples:\n"
+//             + HelpExampleCli("enableconsolidation", "true")
+//             + HelpExampleCli("enableconsolidation", "1")
+//             + HelpExampleRpc("enableconsolidation", "true")
+//             + HelpExampleRpc("enableconsolidation", "1")
+//         );
+//
+//       LOCK2(cs_main, pwalletMain->cs_wallet);
+//
+//       bool enabled = false;
+//       if (params[0].isNum()) {
+//           if (params[0].get_int() != 0) {
+//               enabled = true;
+//           }
+//       } else if (params[0].isBool()) {
+//           if (params[0].isTrue()) {
+//               enabled = true;
+//           }
+//       } else if(params[0].isStr()) {
+//           if (params[0].get_str() == "true" || "1") {
+//               enabled = true;
+//           } else if (params[0].get_str() == "false" || "0") {
+//               enabled = false;
+//           } else {
+//             throw JSONRPCError(RPC_TYPE_ERROR, "Invalid type provided. Verbose parameter must be a boolean.");
+//           }
+//       } else {
+//           throw JSONRPCError(RPC_TYPE_ERROR, "Invalid type provided. Verbose parameter must be a boolean.");
+//       }
+//
+//
+//       pwalletMain->fSaplingConsolidationEnabled = enabled;
+//
+//       UniValue result(UniValue::VOBJ);
+//       result.push_back(Pair("consolidationEnabled", enabled));
+//
+//       return result;
+// }
+
+UniValue consolidationstatus(const UniValue& params, bool fHelp, const CPubKey& mypk)
+{
+
+    if (!EnsureWalletIsAvailable(fHelp))
+        return NullUniValue;
+
+    if (fHelp || params.size() > 0)
+        throw runtime_error(
+            "consolidationstatus\n"
+            "\nEnable or Disable consolidation function in a running node."
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("consolidationstatus", "true")
+            + HelpExampleRpc("consolidationstatus", "true")
+        );
+
+      LOCK2(cs_main, pwalletMain->cs_wallet);
+
+      UniValue result(UniValue::VOBJ);
+      result.push_back(Pair("consolidationEnabled", pwalletMain->fSaplingConsolidationEnabled));
+      result.push_back(Pair("isRunning", pwalletMain->fConsolidationRunning));
+      if (pwalletMain->fConsolidationRunning) {
+          result.push_back(Pair("nextConsolidation", pwalletMain->initializeConsolidationInterval + chainActive.Tip()->nHeight));
+      } else {
+          if (pwalletMain->nextConsolidation == 0) {
+              result.push_back(Pair("nextConsolidation",  chainActive.Tip()->nHeight + 1));
+          } else {
+              result.push_back(Pair("nextConsolidation", pwalletMain->nextConsolidation));
+          }
+      }
+      result.push_back(Pair("consolidationInterval", pwalletMain->initializeConsolidationInterval));
+      result.push_back(Pair("targetQty", pwalletMain->targetConsolidationQty));
+
+      return result;
+}
 
 #define MERGE_TO_ADDRESS_DEFAULT_TRANSPARENT_LIMIT 50
 #define MERGE_TO_ADDRESS_DEFAULT_SPROUT_LIMIT 20

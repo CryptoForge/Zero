@@ -131,6 +131,7 @@ struct BlockHasher
 extern boost::optional<unsigned int> expiryDeltaArg;
 extern CScript COINBASE_FLAGS;
 extern CCriticalSection cs_main;
+extern CBlockPolicyEstimator feeEstimator;
 extern CTxMemPool mempool;
 typedef boost::unordered_map<uint256, CBlockIndex*, BlockHasher> BlockMap;
 extern BlockMap mapBlockIndex;
@@ -139,6 +140,9 @@ extern uint64_t nLastBlockSize;
 extern const std::string strMessageMagic;
 extern CWaitableCriticalSection csBestBlock;
 extern CConditionVariable cvBlockChange;
+
+extern int chainMaxHeight;
+
 extern bool fExperimentalMode;
 extern bool fImporting;
 extern bool fReindex;
@@ -164,6 +168,9 @@ extern bool fSpentIndex;
 extern bool fTimestampIndex;
 
 // END insightexplorer
+
+//Set Transactions Archive rule to require reindex
+extern bool fArchive;
 
 extern bool fIsBareMultisigStd;
 extern bool fCheckBlockIndex;
